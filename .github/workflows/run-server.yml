@@ -1,0 +1,76 @@
+name: Run Server API
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */5 * * *'
+
+concurrency:
+  group: run-server
+  cancel-in-progress: true
+
+jobs:
+  run-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: huydepayqiu119-cpu/server-api
+          token: ${{ secrets.APISERVER }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm install
+
+      - run: |
+          curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+          sudo apt-get update -qq && sudo apt-get install -y ngrok
+
+      - name: Start server, ngrok and stream logs
+        run: |
+          node index.js > /tmp/server.log 2>&1 &
+
+          for i in $(seq 1 15); do
+            curl -s http://localhost:25565/health > /dev/null 2>&1 && break
+            sleep 2
+          done
+
+          ngrok config add-authtoken "$NGROK_TOKEN"
+          ngrok http 25565 > /tmp/ngrok.log 2>&1 &
+
+          for i in $(seq 1 30); do
+            NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' 2>/dev/null)
+            [ -n "$NGROK_URL" ] && [ "$NGROK_URL" != "null" ] && break
+            sleep 2
+          done
+
+          [ -z "$NGROK_URL" ] || [ "$NGROK_URL" = "null" ] && echo "Failed to get ngrok URL" && exit 1
+
+          FILE_SHA=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.APISERVER }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/huydepayqiu119-cpu/github-server-api/contents/ip.txt \
+            | jq -r '.sha')
+
+          curl -s -X PUT \
+            -H "Authorization: Bearer ${{ secrets.APISERVER }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/huydepayqiu119-cpu/github-server-api/contents/ip.txt \
+            -d "{\"message\":\"update url: $NGROK_URL\",\"content\":\"$(echo -n "$NGROK_URL" | base64 -w 0)\",\"sha\":\"$FILE_SHA\"}"
+
+          echo "Tunnel URL: $NGROK_URL"
+          tail -f /tmp/server.log
+        env:
+          PORT: 25565
+          GITHUB_TOKEN: ${{ secrets.APISERVER }}
+          GITHUB_OWNER: huydepayqiu119-cpu
+          GITHUB_REPO: github-server-api
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          LOBFILE_API_KEYS: ${{ secrets.LOBFILE_API_KEYS }}
+          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
