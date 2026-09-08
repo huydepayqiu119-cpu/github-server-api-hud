@@ -1,4 +1,4 @@
-name: Run Server API
+name: Run Server API HUD
 
 on:
   workflow_dispatch:
@@ -12,13 +12,13 @@ concurrency:
 jobs:
   run-server:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 700
 
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: huydepayqiu119-cpu/server-api
-          token: ${{ secrets.APISERVER }}
+          repository: huydepayqiu119-cpu/server-api-hud
+          token: ${{ secrets.APISERVERHUD }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -55,22 +55,22 @@ jobs:
           FILE_SHA=$(curl -s \
             -H "Authorization: Bearer ${{ secrets.APISERVER }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/huydepayqiu119-cpu/github-server-api/contents/ip.txt \
+            https://api.github.com/repos/huydepayqiu119-cpu/github-server-api-hud/contents/ip.txt \
             | jq -r '.sha')
 
           curl -s -X PUT \
             -H "Authorization: Bearer ${{ secrets.APISERVER }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/huydepayqiu119-cpu/github-server-api/contents/ip.txt \
+            https://api.github.com/repos/huydepayqiu119-cpu/github-server-api-hud/contents/ip.txt \
             -d "{\"message\":\"update url: $NGROK_URL\",\"content\":\"$(echo -n "$NGROK_URL" | base64 -w 0)\",\"sha\":\"$FILE_SHA\"}"
 
           echo "Tunnel URL: $NGROK_URL"
           tail -f /tmp/server.log
         env:
           PORT: 25565
-          GITHUB_TOKEN: ${{ secrets.APISERVER }}
+          GITHUB_TOKEN: ${{ secrets.APISERVERHUD }}
           GITHUB_OWNER: huydepayqiu119-cpu
-          GITHUB_REPO: github-server-api
+          GITHUB_REPO: github-server-api-hud
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           LOBFILE_API_KEYS: ${{ secrets.LOBFILE_API_KEYS }}
           NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
