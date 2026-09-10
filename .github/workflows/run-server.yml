@@ -34,14 +34,19 @@ jobs:
 
       - name: Start server, ngrok and stream logs
         run: |
+          tg() { curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" -d chat_id="$TELEGRAM_CHAT_ID" -d parse_mode="HTML" -d text="$1" > /dev/null; }
+
           node index.js > /tmp/server.log 2>&1 &
+          SERVER_PID=$!
 
-          for i in $(seq 1 15); do
-            curl -s http://localhost:25565/health > /dev/null 2>&1 && break
-            sleep 2
-          done
+          for i in $(seq 1 15); do curl -s http://localhost:25565/health > /dev/null 2>&1 && break; sleep 2; done
 
-          ngrok config add-authtoken "$NGROK_TOKEN"
+          if ! curl -s http://localhost:25565/health > /dev/null 2>&1; then
+            tg "❌ <b>Server failed!</b>&#10;<code>$(tail -20 /tmp/server.log)</code>"
+            exit 1
+          fi
+
+          ngrok config add-authtoken "$NGROK_TOKEN" > /dev/null 2>&1
           ngrok http 25565 > /tmp/ngrok.log 2>&1 &
 
           for i in $(seq 1 30); do
@@ -50,22 +55,60 @@ jobs:
             sleep 2
           done
 
-          [ -z "$NGROK_URL" ] || [ "$NGROK_URL" = "null" ] && echo "Failed to get ngrok URL" && exit 1
+          if [ -z "$NGROK_URL" ] || [ "$NGROK_URL" = "null" ]; then
+            tg "❌ <b>Ngrok failed!</b>&#10;<code>$(tail -10 /tmp/ngrok.log)</code>"
+            exit 1
+          fi
 
           FILE_SHA=$(curl -s \
-            -H "Authorization: Bearer ${{ secrets.APISERVERHUD }}" \
+            -H "Authorization: Bearer ${{ secrets.APISERVER }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/huydepayqiu119-cpu/github-server-api-hud/contents/ip.txt \
             | jq -r '.sha')
 
           curl -s -X PUT \
-            -H "Authorization: Bearer ${{ secrets.APISERVERHUD }}" \
+            -H "Authorization: Bearer ${{ secrets.APISERVER }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/huydepayqiu119-cpu/github-server-api-hud/contents/ip.txt \
-            -d "{\"message\":\"update url: $NGROK_URL\",\"content\":\"$(echo -n "$NGROK_URL" | base64 -w 0)\",\"sha\":\"$FILE_SHA\"}"
+            -d "{\"message\":\"update url: $NGROK_URL\",\"content\":\"$(echo -n "$NGROK_URL" | base64 -w 0)\",\"sha\":\"$FILE_SHA\"}" > /dev/null
+
+          EARLY_LOG=$(cat /tmp/server.log | head -c 3000)
+          MSG="🌐 <b>$NGROK_URL</b>&#10;⏰ $(date '+%Y-%m-%d %H:%M:%S UTC')&#10;&#10;<code>$EARLY_LOG</code>"
+          curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"parse_mode\":\"HTML\",\"text\":$(echo "$MSG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}" > /dev/null
 
           echo "Tunnel URL: $NGROK_URL"
-          tail -f /tmp/server.log
+
+          tg_json() {
+            curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"parse_mode\":\"HTML\",\"text\":$(echo "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}" > /dev/null
+          }
+
+          LAST_LINE=$(wc -l < /tmp/server.log)
+          LAST_PING=$(date +%s)
+
+          while true; do
+            sleep 10
+
+            CURRENT_LINE=$(wc -l < /tmp/server.log)
+            if [ "$CURRENT_LINE" -gt "$LAST_LINE" ]; then
+              NEW_LINES=$(sed -n "$((LAST_LINE + 1)),${CURRENT_LINE}p" /tmp/server.log)
+              echo "$NEW_LINES"
+              LAST_LINE=$CURRENT_LINE
+              tg_json "<code>$(echo "$NEW_LINES" | head -c 3500)</code>"
+            fi
+
+            NOW=$(date +%s)
+            if [ $((NOW - LAST_PING)) -ge 1800 ]; then
+              UPTIME=$(ps -p $SERVER_PID -o etime= 2>/dev/null || echo "unknown")
+              tg_json "💓 <b>Still running</b>&#10;Uptime: $UPTIME&#10;URL: <code>$NGROK_URL</code>"
+              LAST_PING=$NOW
+            fi
+
+            kill -0 $SERVER_PID 2>/dev/null || { tg_json "💀 <b>Server process died!</b>"; exit 1; }
+          done
         env:
           PORT: 25565
           GITHUB_TOKEN: ${{ secrets.APISERVERHUD }}
@@ -74,3 +117,5 @@ jobs:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           LOBFILE_API_KEYS: ${{ secrets.LOBFILE_API_KEYS }}
           NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
