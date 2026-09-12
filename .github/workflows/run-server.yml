@@ -25,16 +25,20 @@ jobs:
         with:
           node-version: '20'
 
-      - run: npm install
+      - run: npm install > /dev/null 2>&1
 
       - run: |
-          curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
-          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
-          sudo apt-get update -qq && sudo apt-get install -y ngrok
+          curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null 2>&1
+          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list >/dev/null
+          sudo apt-get update -qq > /dev/null 2>&1 && sudo apt-get install -y ngrok > /dev/null 2>&1
 
       - name: Start server, ngrok and stream logs
         run: |
-          tg() { curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" -d chat_id="$TELEGRAM_CHAT_ID" -d parse_mode="HTML" -d text="$1" > /dev/null; }
+          tg_json() {
+            curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"parse_mode\":\"HTML\",\"text\":$(echo "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}" > /dev/null 2>&1
+          }
 
           node index.js > /tmp/server.log 2>&1 &
           SERVER_PID=$!
@@ -42,7 +46,7 @@ jobs:
           for i in $(seq 1 15); do curl -s http://localhost:25565/health > /dev/null 2>&1 && break; sleep 2; done
 
           if ! curl -s http://localhost:25565/health > /dev/null 2>&1; then
-            tg "❌ <b>Server failed!</b>&#10;<code>$(tail -20 /tmp/server.log)</code>"
+            tg_json "❌ <b>Server failed!</b>&#10;<code>$(tail -20 /tmp/server.log)</code>"
             exit 1
           fi
 
@@ -56,35 +60,29 @@ jobs:
           done
 
           if [ -z "$NGROK_URL" ] || [ "$NGROK_URL" = "null" ]; then
-            tg "❌ <b>Ngrok failed!</b>&#10;<code>$(tail -10 /tmp/ngrok.log)</code>"
+            tg_json "❌ <b>Ngrok failed!</b>&#10;<code>$(tail -10 /tmp/ngrok.log)</code>"
             exit 1
           fi
 
           FILE_SHA=$(curl -s \
-            -H "Authorization: Bearer ${{ secrets.APISERVER }}" \
+            -H "Authorization: Bearer ${{ secrets.APISERVERHUD }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/huydepayqiu119-cpu/github-server-api-hud/contents/ip.txt \
             | jq -r '.sha')
 
           curl -s -X PUT \
-            -H "Authorization: Bearer ${{ secrets.APISERVER }}" \
+            -H "Authorization: Bearer ${{ secrets.APISERVERHUD }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/huydepayqiu119-cpu/github-server-api-hud/contents/ip.txt \
-            -d "{\"message\":\"update url: $NGROK_URL\",\"content\":\"$(echo -n "$NGROK_URL" | base64 -w 0)\",\"sha\":\"$FILE_SHA\"}" > /dev/null
+            -d "{\"message\":\"update url: $NGROK_URL\",\"content\":\"$(echo -n "$NGROK_URL" | base64 -w 0)\",\"sha\":\"$FILE_SHA\"}" > /dev/null 2>&1
 
           EARLY_LOG=$(cat /tmp/server.log | head -c 3000)
           MSG="🌐 <b>$NGROK_URL</b>&#10;⏰ $(date '+%Y-%m-%d %H:%M:%S UTC')&#10;&#10;<code>$EARLY_LOG</code>"
           curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"parse_mode\":\"HTML\",\"text\":$(echo "$MSG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}" > /dev/null
+            -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"parse_mode\":\"HTML\",\"text\":$(echo "$MSG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}" > /dev/null 2>&1
 
           echo "Tunnel URL: $NGROK_URL"
-
-          tg_json() {
-            curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
-              -H "Content-Type: application/json" \
-              -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"parse_mode\":\"HTML\",\"text\":$(echo "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}" > /dev/null
-          }
 
           LAST_LINE=$(wc -l < /tmp/server.log)
           LAST_PING=$(date +%s)
@@ -95,7 +93,6 @@ jobs:
             CURRENT_LINE=$(wc -l < /tmp/server.log)
             if [ "$CURRENT_LINE" -gt "$LAST_LINE" ]; then
               NEW_LINES=$(sed -n "$((LAST_LINE + 1)),${CURRENT_LINE}p" /tmp/server.log)
-              echo "$NEW_LINES"
               LAST_LINE=$CURRENT_LINE
               tg_json "<code>$(echo "$NEW_LINES" | head -c 3500)</code>"
             fi
