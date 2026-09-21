@@ -4,10 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
-    - cron: '0 5 * * *'
-    - cron: '0 10 * * *'
-    - cron: '0 15 * * *'
-    - cron: '0 20 * * *'
 
 concurrency:
   group: run-server
@@ -91,14 +87,18 @@ jobs:
           LAST_LINE=$(wc -l < /tmp/server.log)
           LAST_PING=$(date +%s)
           START_TIME=$(date +%s)
-          MAX_DURATION=$((5 * 60 * 60))
+          MAX_DURATION=$((30))
 
           while true; do
             sleep 10
 
             NOW=$(date +%s)
             if [ $((NOW - START_TIME)) -ge $MAX_DURATION ]; then
-              tg_json "⏱ <b>5h limit reached, restarting...</b>"
+              curl -s -X POST \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                https://api.github.com/repos/huydepayqiu119-cpu/github-server-api-hud/actions/workflows/run-server.yml/dispatches \
+                -d '{"ref":"main"}' > /dev/null 2>&1
               break
             fi
 
@@ -127,12 +127,3 @@ jobs:
           NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
-      - name: Trigger next run
-        if: always()
-        run: |
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.APISERVERHUD }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/huydepayqiu119-cpu/github-server-api-hud/actions/workflows/run-server.yml/dispatches \
-            -d '{"ref":"main"}'
