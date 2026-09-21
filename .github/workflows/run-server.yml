@@ -87,7 +87,7 @@ jobs:
           LAST_LINE=$(wc -l < /tmp/server.log)
           LAST_PING=$(date +%s)
           START_TIME=$(date +%s)
-          MAX_DURATION=$((30))
+          MAX_DURATION=$((10))
 
           while true; do
             sleep 10
